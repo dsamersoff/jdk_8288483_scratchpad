@@ -1,13 +1,14 @@
-jint Arguments::parse_java_options_environment_variable(ScopedVMInitArgs* args) {
-  return parse_options_environment_variable("_JAVA_OPTIONS", args);
+jint Arguments::parse_java_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p) {
+  return parse_options_environment_variable("_JAVA_OPTIONS", scp_p,
+                                            scp_assembly_required_p);
 }
 
-jint Arguments::parse_java_tool_options_environment_variable(ScopedVMInitArgs* args) {
-  return parse_options_environment_variable("JAVA_TOOL_OPTIONS", args);
+jint Arguments::parse_java_tool_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p) {
+  return parse_options_environment_variable("JAVA_TOOL_OPTIONS", scp_p,
+                                            scp_assembly_required_p);
 }
 
-jint Arguments::parse_options_environment_variable(const char* name,
-                                                   ScopedVMInitArgs* vm_args) {
+jint Arguments::parse_options_environment_variable(const char* name, SysClassPath* scp_p, bool* scp_assembly_required_p) {
   char *buffer = ::getenv(name);
 
   // Don't check this environment variable if user has special privileges
@@ -23,14 +24,14 @@ jint Arguments::parse_options_environment_variable(const char* name,
   jio_fprintf(defaultStream::error_stream(),
               "Picked up %s: %s\n", name, buffer);
 
-  int retcode = parse_options_buffer(name, buffer, strlen(buffer), vm_args);
+  int retcode = parse_options_buffer(name, buffer, strlen(buffer), scp_p, scp_assembly_required_p);
 
   os::free(buffer);
   return retcode;
 }
 
-jint Arguments::parse_options_buffer(const char* name, char* buffer, const size_t buf_len, ScopedVMInitArgs* vm_args) {
-  GrowableArray<JavaVMOption> *options = new (ResourceObj::C_HEAP, mtArguments) GrowableArray<JavaVMOption>(2, true);    // Construct option array
+jint Arguments::parse_options_buffer(const char* name, char* buffer, const size_t buf_len, SysClassPath* scp_p, bool* scp_assembly_required_p) {
+  GrowableArray<JavaVMOption> *options = new (ResourceObj::C_HEAP, mtInternal) GrowableArray<JavaVMOption>(2, true);    // Construct option array
 
   // some pointers to help with parsing
   char *buffer_end = buffer + buf_len;
@@ -84,16 +85,30 @@ jint Arguments::parse_options_buffer(const char* name, char* buffer, const size_
 
     JavaVMOption option;
     option.optionString = opt_hd;
-    option.extraInfo = NULL;
-
     options->append(option);                // Fill in option
 
     rd++;  // Advance to next character
   }
 
-  // Fill out JavaVMInitArgs structure.
-  jint status = vm_args->set_args(options);
+  // Construct JavaVMInitArgs structure and parse as if it was part of the command line
+  JavaVMInitArgs vm_args;
+  vm_args.version = JNI_VERSION_1_2;
+  vm_args.options = options->adr_at(0);
+  vm_args.nOptions = options->length();
+  vm_args.ignoreUnrecognized = IgnoreUnrecognizedVMOptions;
+
+  if (PrintVMOptions) {
+    const char* tail;
+    for (int i = 0; i < vm_args.nOptions; i++) {
+      const JavaVMOption *option = vm_args.options + i;
+      if (match_option(option, "-XX:", &tail)) {
+        logOption(tail);
+      }
+    }
+  }
+
+  int parse_result = parse_each_vm_init_arg(&vm_args, scp_p, scp_assembly_required_p, Flag::ENVIRON_VAR);
 
   delete options;
-  return status;
+  return parse_result;
 }
